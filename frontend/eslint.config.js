@@ -24,6 +24,32 @@ export default defineConfig([
     languageOptions: {
       globals: { ...globals.browser, ...globals.node },
     },
+    rules: {
+      // Cross-feature isolation: outside code may only touch a feature via its
+      // public barrel. Internal feature files use relative imports.
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@features/*/*'],
+              message:
+                'Import features through their public barrel only (e.g. `@features/auth`). Internal feature imports must use relative paths.',
+            },
+            {
+              group: ['@mocks/*', '@mocks'],
+              message:
+                'Components/features must not import from @mocks directly. Go through the service hooks → apiClient layer (see ARCHITECTURE.md).',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // The apiClient is the single sanctioned consumer of the mock layer.
+    files: ['src/lib/**/*.{ts,tsx}', 'src/mocks/**/*.{ts,tsx}'],
+    rules: { 'no-restricted-imports': 'off' },
   },
   {
     files: ['**/*.test.{ts,tsx}', 'vitest.setup.ts', 'e2e/**/*.{ts,tsx}'],
