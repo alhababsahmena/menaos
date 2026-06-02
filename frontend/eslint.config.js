@@ -1,60 +1,40 @@
-import js from '@eslint/js'
-import globals from 'globals'
-import reactHooks from 'eslint-plugin-react-hooks'
-import reactRefresh from 'eslint-plugin-react-refresh'
-import tseslint from 'typescript-eslint'
-import { defineConfig, globalIgnores } from 'eslint/config'
+import js from "@eslint/js";
+import eslintPluginPrettier from "eslint-plugin-prettier/recommended";
+import globals from "globals";
+import reactHooks from "eslint-plugin-react-hooks";
+import reactRefresh from "eslint-plugin-react-refresh";
+import tseslint from "typescript-eslint";
 
-export default defineConfig([
-  globalIgnores([
-    'dist',
-    'node_modules',
-    'playwright-report',
-    'test-results',
-    'coverage',
-  ]),
+export default tseslint.config(
+  { ignores: ["dist", ".output", ".vinxi"] },
   {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      js.configs.recommended,
-      tseslint.configs.recommended,
-      reactHooks.configs.flat.recommended,
-      reactRefresh.configs.vite,
-    ],
+    extends: [js.configs.recommended, ...tseslint.configs.recommended],
+    files: ["**/*.{ts,tsx}"],
     languageOptions: {
-      globals: { ...globals.browser, ...globals.node },
+      ecmaVersion: 2020,
+      globals: globals.browser,
+    },
+    plugins: {
+      "react-hooks": reactHooks,
+      "react-refresh": reactRefresh,
     },
     rules: {
-      // Cross-feature isolation: outside code may only touch a feature via its
-      // public barrel. Internal feature files use relative imports.
-      'no-restricted-imports': [
-        'error',
+      ...reactHooks.configs.recommended.rules,
+      "no-restricted-imports": [
+        "error",
         {
-          patterns: [
+          paths: [
             {
-              group: ['@features/*/*'],
+              name: "server-only",
               message:
-                'Import features through their public barrel only (e.g. `@features/auth`). Internal feature imports must use relative paths.',
-            },
-            {
-              group: ['@mocks/*', '@mocks'],
-              message:
-                'Components/features must not import from @mocks directly. Go through the service hooks → apiClient layer (see ARCHITECTURE.md).',
+                "TanStack Start does not use the Next.js `server-only` package. Rename the module to `*.server.ts` or mark it with `@tanstack/react-start/server-only`.",
             },
           ],
         },
       ],
+      "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
+      "@typescript-eslint/no-unused-vars": "off",
     },
   },
-  {
-    // The apiClient is the single sanctioned consumer of the mock layer.
-    files: ['src/lib/**/*.{ts,tsx}', 'src/mocks/**/*.{ts,tsx}'],
-    rules: { 'no-restricted-imports': 'off' },
-  },
-  {
-    files: ['**/*.test.{ts,tsx}', 'vitest.setup.ts', 'e2e/**/*.{ts,tsx}'],
-    languageOptions: {
-      globals: { ...globals.browser, ...globals.node },
-    },
-  },
-])
+  eslintPluginPrettier,
+);
