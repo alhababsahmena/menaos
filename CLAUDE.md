@@ -3,7 +3,7 @@
 MENAOS is a data-ops logging, dispute-chain, and financial-tracking system. It
 keeps an audit-grade record of operational tasks, the disputes raised against
 them, and the money those tasks generate. The product surface is a decoupled
-SPA (React) talking to a Django/DRF API backed by PostgreSQL 16, Microsoft Entra
+SPA (React) talking to a FastAPI API backed by PostgreSQL 16, Microsoft Entra
 SSO, and S3/MinIO for signed-URL object storage.
 
 This file is the workspace contract for future prompts: stack pins, commands,
@@ -11,19 +11,31 @@ and conventions to enforce.
 
 ## Stack reconciliation
 
-Any reference in the schema DBML or earlier docs to "Laravel migrations" or raw
-`DB::statement(...)` is **superseded**. The backend is Django/DRF (canonical).
-Postgres-side constraints (CHECKs, partial-unique indexes, EXCLUDE constraints)
-are implemented via Django `migrations.RunSQL(...)` in the relevant app's
-migrations — not via Laravel artisan migrations.
+The backend is **FastAPI + SQLAlchemy 2.0 + Alembic + PostgreSQL 16**
+(canonical), Python 3.12, **synchronous** (`psycopg` v3; FastAPI runs sync routes
+in a threadpool). Async is a valid alternative not currently adopted — if it is
+chosen later, only the driver/session/Alembic/test layer flips.
+
+Any reference in the schema DBML or earlier docs to "Laravel migrations" / raw
+`DB::statement(...)`, **or to Django/DRF**, is **superseded** by the FastAPI
+stack above. Postgres-side constraints (CHECKs, partial-unique indexes, EXCLUDE
+constraints) and the `btree_gist` extension + rejection trigger are written as
+raw DDL via Alembic `op.execute(...)` in the relevant migration — not via Laravel
+or Django migrations. DBML table names are used verbatim as SQLAlchemy
+`__tablename__` (no prefixing).
+
+The canonical schema is **`docs/schema.v1.1.dbml`** — the field-level source of
+truth (22 tables + a MIGRATION LAYER section for the partial-unique indexes,
+CHECK/EXCLUDE constraints, and the dispute-chain trigger that DBML can't express).
 
 ## Directory layout
 
 ```
 menaos/
-  backend/         # Django 5.2 LTS + DRF, Python 3.12
-    config/       #   project package (settings, urls, wsgi, asgi)
-    tests/        #   pytest test suite (mirrors src apps)
+  backend/         # FastAPI + SQLAlchemy 2.0 + Alembic, Python 3.12 (sync)
+    app/          #   application package (core/ + modules/)
+    migrations/   #   Alembic env + versions/
+    tests/        #   pytest test suite (mirrors app/)
     .venv/        #   local virtualenv (gitignored)
     requirements.txt        # runtime pins
     requirements-dev.txt    # dev pins (-r requirements.txt)
@@ -45,37 +57,40 @@ menaos/
 
 ## Resolved dependency versions
 
-All versions below were web-checked against the upstream registry on
-**2026-05-31** and pin the latest stable release (with the line constraints
-from the canonical stack honored).
+Frontend versions were web-checked on **2026-05-31**; the FastAPI backend
+versions were web-checked against the PyPI registry on **2026-06-04**. All pin
+the latest stable release (with the line constraints from the canonical stack
+honored).
 
 ### Backend (Python 3.12, runtime — `backend/requirements.txt`)
 
 | Package | Pinned | Notes |
 | --- | --- | --- |
-| Django | 5.2.14 | LTS 5.x line; **6.0.5 is GA but NOT adopted** per stack pin |
-| djangorestframework | 3.17.1 | |
-| mozilla-django-oidc | 5.0.2 | Microsoft Entra SSO |
-| djangorestframework-simplejwt | 5.5.1 | |
+| fastapi | 0.136.3 | |
+| uvicorn[standard] | 0.49.0 | ASGI server |
+| sqlalchemy | 2.0.50 | 2.0.x line |
+| alembic | 1.18.4 | migrations |
 | psycopg[binary] | 3.3.4 | psycopg 3 (not psycopg2) |
-| django-storages | 1.14.6 | |
-| boto3 | 1.43.18 | |
-| django-cors-headers | 4.9.0 | |
-| django-environ | 0.13.0 | |
-| gunicorn | 26.0.0 | |
+| pydantic | 2.13.4 | v2 |
+| pydantic-settings | 2.14.1 | |
+| python-multipart | 0.0.30 | file uploads |
+| httpx | 0.28.1 | |
+| pyjwt[crypto] | 2.13.0 | Entra JWT validation (not yet wired into auth) |
+| boto3 | 1.43.22 | S3/MinIO |
+| cachetools | 7.1.4 | in-process TTL cache for resolved permissions (no Redis) |
+| gunicorn | 26.0.0 | prod process manager fronting uvicorn workers |
 
 ### Backend (dev — `backend/requirements-dev.txt`)
 
 | Package | Pinned | Notes |
 | --- | --- | --- |
 | pytest | 9.0.3 | |
-| pytest-django | 4.12.0 | |
-| factory-boy | 3.3.3 | |
+| factory_boy | 3.3.3 | |
 | ruff | 0.15.15 | |
 | black | 26.5.1 | |
-| mypy | 2.1.0 | within `django-stubs` `<2.2` cap |
-| django-stubs[compatible-mypy] | 6.0.5 | |
-| djangorestframework-stubs | 3.17.0 | |
+| mypy | 2.1.0 | |
+| pytest-cov | 7.1.0 | optional |
+| boto3-stubs[s3] | 1.43.22 | optional |
 
 ### Frontend (runtime — `frontend/package.json` `dependencies`)
 
@@ -126,12 +141,10 @@ from the canonical stack honored).
 
 ### Newer majors deliberately NOT adopted
 
-- **Django 6.0.5** — stack pin is Django 5.x LTS. Revisit after Django 5.2 LTS
-  support window starts winding down.
 - **React Router 7.x** — stack pin is React Router 6. Migrating to 7 is a
   separate effort (data-router APIs, framework mode).
 
-Both are flagged here so future prompts know to ask before upgrading.
+Flagged here so future prompts know to ask before upgrading.
 
 ## Commands
 
@@ -141,11 +154,12 @@ Both are flagged here so future prompts know to ask before upgrading.
 cd backend
 source .venv/bin/activate          # activate the Python 3.12 venv
 
-# Run server (PostgreSQL must be reachable per .env / DATABASE_URL)
-python manage.py runserver
+# Run server (PostgreSQL must be reachable per .env POSTGRES_* vars)
+uvicorn app.main:app --reload      # dev
 
-# After first migration, create the DatabaseCache table:
-python manage.py createcachetable
+# Migrations (Alembic)
+alembic upgrade head
+alembic revision --autogenerate -m "message"
 
 # Tests + tooling
 pytest
@@ -184,9 +198,9 @@ These are load-bearing and apply across every feature prompt that follows:
 - **SSO match key is `oid`, never `email`.** The Entra `oid` claim is immutable
   per tenant; emails can change and be reused. Look up / link users by `oid`.
 - **RBAC is table-driven.** Permissions live in three tables —
-  `permissions`, `roles`, `role_permissions` — and are **resolved + cached per
-  request** (via Django DatabaseCache). No hard-coded permission strings in
-  view code; ask the cache.
+  `permissions`, `roles`, `role_permissions` — and are **resolved + cached**
+  (via an in-process `cachetools` TTL cache; no Redis). No hard-coded permission
+  strings in route code; ask the cache.
 - **Object storage uses signed URLs only.** No public-read buckets. Generate
   short-lived signed URLs server-side; SPA never touches credentials.
 - **Optimistic locking on `tasks.version`.** Mutating endpoints accept the
@@ -194,10 +208,11 @@ These are load-bearing and apply across every feature prompt that follows:
   refetch** (TanStack Query) before retrying.
 - **One currency per platform.** Money columns are `NUMERIC(12,2)`. Never
   `SUM(JOD + USD)` — segregate or convert explicitly.
-- **Postgres-side constraints live in `RunSQL` migrations.** CHECK constraints,
-  partial-unique indexes, and EXCLUDE constraints are written as raw SQL in
-  `migrations.RunSQL(forward, reverse)` blocks — not derived from Django
-  validators.
+- **Postgres-side constraints live in raw-DDL Alembic migrations.** CHECK
+  constraints, partial-unique indexes, EXCLUDE constraints, the `btree_gist`
+  extension, and the rejection trigger are written as raw SQL via
+  `op.execute(forward)` with a matching `op.execute(reverse)` in `downgrade()`
+  — not derived from SQLAlchemy/Pydantic validators.
 
 ## Open decisions to confirm before relevant prompts
 

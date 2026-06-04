@@ -1,0 +1,27 @@
+# Python virtualenv
+.venv/
+
+# Byte-compiled / caches
+__pycache__/
+*.py[cod]
+*$py.class
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
